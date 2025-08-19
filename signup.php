@@ -8,8 +8,8 @@ $success = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $username = trim($_POST['username'] ?? '');
     $password = $_POST['password'] ?? '';
-    $rank = $_POST['rank'] ?? 'user';
     $telephone = trim($_POST['telephone'] ?? '');
+    $rank = 'client'; // ✅ Rang par défaut
 
     if ($username !== '' && $password !== '') {
         // Vérifie si l'utilisateur existe déjà
@@ -42,16 +42,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <html lang="fr">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1"> <!-- ✅ important pour mobile -->
   <title>Inscription</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
 </head>
 <body class="bg-light">
   <div class="container py-5">
     <div class="row justify-content-center">
-      <div class="col-md-5">
+      <div class="col-md-4"> <!-- ✅ même largeur que login -->
         <div class="card shadow-sm">
           <div class="card-body">
-            <h1 class="h4 text-center mb-4">Créer un compte</h1>
+            <h1 class="h4 text-center mb-3">Créer un compte</h1>
 
             <?php if ($error): ?>
               <div class="alert alert-danger"><?= htmlspecialchars($error) ?></div>
@@ -60,7 +61,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
               <div class="alert alert-success"><?= htmlspecialchars($success) ?></div>
             <?php endif; ?>
 
-            <form method="post">
+            <form method="post" autocomplete="off">
               <div class="mb-3">
                 <label class="form-label">Nom d'utilisateur</label>
                 <input type="text" name="username" class="form-control" required>
@@ -71,22 +72,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
               </div>
               <div class="mb-3">
                 <label class="form-label">Téléphone</label>
-                <input type="text" name="telephone" class="form-control">
-              </div>
-              <div class="mb-3">
-                <label class="form-label">Rang</label>
-                <select name="rank" class="form-select">
-                  <option value="user">Utilisateur</option>
-                  <option value="admin">Administrateur</option>
-                </select>
+                <input type="text" name="telephone" class="form-control" required>
               </div>
               <button type="submit" class="btn btn-success w-100">S'inscrire</button>
             </form>
-            <p class="mt-3 text-center">
+
+            <p class="text-center mt-3">
               Déjà un compte ? <a href="login.php">Connexion</a>
             </p>
           </div>
         </div>
+        <p class="text-center text-muted small mt-3">
+          Vous serez enregistré automatiquement comme <b>client</b>.
+        </p>
       </div>
     </div>
   </div>

@@ -3,15 +3,6 @@
 session_start();
 require_once 'connexion.php';
 
-// Détection connexion
-if (isset($pdo) && $pdo instanceof PDO) {
-    $db = $pdo;
-} elseif (isset($conn) && $conn instanceof PDO) {
-    $db = $conn;
-} else {
-    die('Erreur : connexion DB introuvable (vérifie connexion.php).');
-}
-
 // Vérification session
 if (!isset($_SESSION['user']['username']) && !isset($_SESSION['username'])) {
     header('Location: login.php');
@@ -22,22 +13,28 @@ $error = '';
 $success = '';
 
 // Calcul prochain numéro
-$r = $db->query("SELECT MAX(num_tache) AS last_num FROM taches")->fetch(PDO::FETCH_ASSOC);
+$r = $pdo->query("SELECT MAX(num_tache) AS last_num FROM taches")->fetch(PDO::FETCH_ASSOC);
 $nextNumTache = ($r && $r['last_num']) ? (intval($r['last_num']) + 1) : 1;
 
 // Récupération partenaires
-$users = [];
-try {
-    $users = $db->query("SELECT id, username FROM users ORDER BY username ASC")->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    // ignore
-}
+$users = $pdo->query("SELECT id, username FROM users ORDER BY username ASC")->fetchAll(PDO::FETCH_ASSOC);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $nom_tache = trim($_POST['nom_tache'] ?? '');
+    $detail_tache = trim($_POST['detail_tache'] ?? '');
     $date_tache = $_POST['date_tache'] ?? date('Y-m-d');
-    $montant = $_POST['montant'] ?? 0;
+    $montant = floatval($_POST['montant'] ?? 0);
     $partenaire_id = $_POST['partenaire_id'] ?? null;
+    $versement = floatval($_POST['versement'] ?? 0);
+
+    // Déterminer automatiquement l'état du paiement
+    if ($versement <= 0) {
+        $payement_client = "non paye";
+    } elseif ($versement < $montant) {
+        $payement_client = "partiel";
+    } else {
+        $payement_client = "paye";
+    }
 
     if ($nom_tache === '') {
         $error = "Le nom de la tâche est requis.";
@@ -45,131 +42,170 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $error = "Veuillez sélectionner un partenaire.";
     } else {
         try {
-            $db->beginTransaction();
+            $pdo->beginTransaction();
 
             // Insertion dans taches
-            $sql1 = "INSERT INTO taches (num_tache, nom_tache, `date`, montant_tache) 
-                     VALUES (:num_tache, :nom_tache, :date_tache, :montant)";
-            $stm1 = $db->prepare($sql1);
-            $stm1->bindValue(':num_tache', $nextNumTache, PDO::PARAM_INT);
-            $stm1->bindValue(':nom_tache', $nom_tache, PDO::PARAM_STR);
-            $stm1->bindValue(':date_tache', $date_tache, PDO::PARAM_STR);
-            $stm1->bindValue(':montant', $montant, PDO::PARAM_STR);
-            $stm1->execute();
+            $sql1 = "INSERT INTO taches (num_tache, nom_tache, `date`, montant_tache, versement, payement_client) 
+                     VALUES (:num_tache, :nom_tache, :date_tache, :montant, :versement, :payement_client)";
+            $stmt1 = $pdo->prepare($sql1);
+            $stmt1->execute([
+                ':num_tache' => $nextNumTache,
+                ':nom_tache' => $nom_tache,
+                ':date_tache' => $date_tache,
+                ':montant' => $montant,
+                ':versement' => $versement,
+                ':payement_client' => $payement_client
+            ]);
+            $id_tache = $pdo->lastInsertId();
 
-            $id_tache = $db->lastInsertId();
+            // Insertion partenaire choisi
+            $stmt2 = $pdo->prepare("INSERT INTO partenaires_tache (id_tache, id_partenaire, pourcentage_partenaire) 
+                                    VALUES (:id_tache, :id_partenaire, :pourcentage)");
+            $stmt2->execute([
+                ':id_tache' => $id_tache,
+                ':id_partenaire' => $partenaire_id,
+                ':pourcentage' => 50
+            ]);
 
-            // Insertion dans partenaires_tache
-            $sql2 = "INSERT INTO partenaires_tache (id_tache, id_partenaire) VALUES (:id_tache, :id_partenaire)";
-            $stm2 = $db->prepare($sql2);
-            $stm2->bindValue(':id_tache', $id_tache, PDO::PARAM_INT);
-            $stm2->bindValue(':id_partenaire', $partenaire_id, PDO::PARAM_INT);
-            $stm2->execute();
+            // Ajout du partenaire "local"
+            $localUser = $pdo->query("SELECT id FROM users WHERE username = 'local' LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+            if ($localUser) {
+                $stmtLocal = $pdo->prepare("INSERT INTO partenaires_tache (id_tache, id_partenaire, pourcentage_partenaire) 
+                                            VALUES (:id_tache, :id_partenaire, :pourcentage)");
+                $stmtLocal->execute([
+                    ':id_tache' => $id_tache,
+                    ':id_partenaire' => $localUser['id'],
+                    ':pourcentage' => 50
+                ]);
+            }
 
             // Insertion initiale dans detail_tache
-            $sql3 = "INSERT INTO detail_tache (id_tache, date, etat) VALUES (:id_tache, :date_tache, :etat)";
-            $stm3 = $db->prepare($sql3);
-            $stm3->bindValue(':id_tache', $id_tache, PDO::PARAM_INT);
-            $stm3->bindValue(':date_tache', $date_tache, PDO::PARAM_STR);
-            $stm3->bindValue(':etat', 'non accompli', PDO::PARAM_STR);
-            $stm3->execute();
+            $stmt3 = $pdo->prepare("INSERT INTO detail_tache (id_tache, date, etat, detail_tache) 
+                                    VALUES (:id_tache, :date_tache, :etat, :detail)");
+            $stmt3->execute([
+                ':id_tache' => $id_tache,
+                ':date_tache' => $date_tache,
+                ':etat' => 'non accompli',
+                ':detail' => $detail_tache
+            ]);
 
-            $db->commit();
+           $pdo->commit();
+            $_SESSION['success'] = "Tâche ajoutée avec succès (Numéro : {$nextNumTache}).";
+            header("Location: liste_taches.php");
+            exit;
 
-            // Message de succès et redirection après 2 secondes
-            $success = "Tâche ajoutée avec succès (Numéro : {$nextNumTache}) et partenaire associé.";
-            echo "<meta http-equiv='refresh' content='2;URL=liste_taches.php'>";
-
-            // Vider POST pour reset formulaire
-            $_POST = [];
 
         } catch (PDOException $e) {
-            if ($db->inTransaction()) $db->rollBack();
+            if ($pdo->inTransaction()) $pdo->rollBack();
             $error = "Erreur lors de l'ajout : " . $e->getMessage();
         }
     }
 }
 ?>
+
 <!doctype html>
 <html lang="fr">
 <head>
   <meta charset="utf-8">
   <title>Ajouter une tâche</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"> <!-- important pour mobile -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-  <script>
-    let allOptions = [];
-    window.addEventListener('DOMContentLoaded', () => {
-      document.getElementById('nom_tache')?.focus();
-      const s = document.getElementById('partenaire_id');
-      if (s) allOptions = Array.from(s.options);
-    });
-
-    function searchPartenaire() {
-      const q = document.getElementById('searchPartenaire').value.toLowerCase();
-      const s = document.getElementById('partenaire_id');
-      if (!s) return;
-      s.innerHTML = '';
-      allOptions.forEach(opt => {
-        if (opt.value === '' || opt.text.toLowerCase().includes(q)) s.appendChild(opt);
-      });
+  <style>
+    /* Texte plus grand sur petits écrans */
+    @media (max-width: 576px) {
+      body { font-size: 1.1rem; }   /* légèrement + grand que la base */
+      label, input, textarea, select { font-size: 1.05rem; }
+      h1 { font-size: 1.8rem; }
+      .btn-lg { font-size: 1.2rem; }
     }
-  </script>
+  </style>
 </head>
-<body class="bg-light p-4">
+<body class="bg-light p-3">
+
 <div class="container">
-  <h1 class="mb-4">Ajouter une tâche</h1>
+  <h1 class="text-center mb-4 fw-bold">➕ Ajouter une tâche</h1>
 
   <?php if ($error): ?>
-    <div class="alert alert-danger"><?= htmlspecialchars($error) ?></div>
+    <div class="alert alert-danger fs-5"><?= htmlspecialchars($error) ?></div>
   <?php endif; ?>
   <?php if ($success): ?>
-    <div class="alert alert-success text-center fw-bold"><?= htmlspecialchars($success) ?></div>
+    <div class="alert alert-success text-center fw-bold fs-5"><?= htmlspecialchars($success) ?></div>
   <?php endif; ?>
 
   <?php if (!$success): ?>
-  <form method="post" class="mb-5">
-    <div class="mb-3">
-      <label class="form-label">Numéro de tâche (prévu)</label>
-      <input class="form-control" value="<?= htmlspecialchars($nextNumTache) ?>" readonly>
+  <form method="post" class="row g-3">
+
+    <!-- Carte numéro -->
+    <div class="col-12">
+      <div class="card shadow-sm">
+        <div class="card-body">
+          <label class="form-label fw-semibold fs-5">Numéro de tâche (prévu)</label>
+          <input class="form-control fs-5" value="<?= htmlspecialchars($nextNumTache) ?>" readonly>
+        </div>
+      </div>
     </div>
 
-    <div class="mb-3">
-      <label class="form-label">Nom de la tâche</label>
-      <input id="nom_tache" name="nom_tache" class="form-control" required>
+    <!-- Carte nom & détails -->
+    <div class="col-12">
+      <div class="card shadow-sm">
+        <div class="card-body">
+          <label class="form-label fw-semibold fs-5">Nom de la tâche</label>
+          <input id="nom_tache" name="nom_tache" class="form-control fs-5 mb-3" required autocomplete="off" autofocus>
+          <label class="form-label fw-semibold fs-5">Détail</label>
+          <textarea name="detail_tache" class="form-control fs-5" rows="3" placeholder="Description, client, téléphone, numéro de série..."></textarea>
+        </div>
+      </div>
     </div>
 
-    <div class="mb-3">
-      <label class="form-label">Date</label>
-      <input type="date" name="date_tache" class="form-control" value="<?= date('Y-m-d') ?>" required>
+    <!-- Carte date & montant -->
+    <div class="col-md-6 col-12">
+      <div class="card shadow-sm">
+        <div class="card-body">
+          <label class="form-label fw-semibold fs-5">Date</label>
+          <input type="date" name="date_tache" class="form-control fs-5" value="<?= date('Y-m-d') ?>" required>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-6 col-12">
+      <div class="card shadow-sm">
+        <div class="card-body">
+          <label class="form-label fw-semibold fs-5">Montant</label>
+          <input type="number" step="0.01" name="montant" class="form-control fs-5" value="0">
+        </div>
+      </div>
     </div>
 
-    <div class="mb-3">
-      <label class="form-label">Montant</label>
-      <input type="number" step="0.01" name="montant" class="form-control" value="0">
+    <!-- Carte partenaire & versement -->
+    <div class="col-md-6 col-12">
+      <div class="card shadow-sm">
+        <div class="card-body">
+          <label class="form-label fw-semibold fs-5">Partenaire</label>
+          <select id="partenaire_id" name="partenaire_id" class="form-select fs-5" required>
+            <option value="">-- Choisir --</option>
+            <?php foreach ($users as $u): ?>
+              <option value="<?= (int)$u['id'] ?>"><?= htmlspecialchars($u['username']) ?></option>
+            <?php endforeach; ?>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-6 col-12">
+      <div class="card shadow-sm">
+        <div class="card-body">
+          <label class="form-label fw-semibold fs-5">Versement</label>
+          <input type="number" step="0.01" name="versement" class="form-control fs-5" value="<?= htmlspecialchars($_POST['versement'] ?? 0) ?>">
+        </div>
+      </div>
     </div>
 
-    <div class="mb-3">
-      <label class="form-label">Rechercher un partenaire</label>
-      <input id="searchPartenaire" onkeyup="searchPartenaire()" class="form-control" placeholder="Tapez pour filtrer...">
+    <!-- Bouton -->
+    <div class="col-12 text-center">
+      <button class="btn btn-primary btn-lg px-5 fs-5">✅ Ajouter la tâche</button>
     </div>
-
-    <div class="mb-3">
-      <label class="form-label">Sélectionner un partenaire</label>
-      <select id="partenaire_id" name="partenaire_id" class="form-select" required>
-        <option value="">-- Choisir --</option>
-        <?php foreach ($users as $u): ?>
-          <option value="<?= (int)$u['id'] ?>"><?= htmlspecialchars($u['username']) ?></option>
-        <?php endforeach; ?>
-      </select>
-    </div>
-
-    <div class="mb-3">
-      <a href="ajouter_partenaire.php" class="btn btn-outline-secondary">➕ Nouveau partenaire</a>
-    </div>
-
-    <button class="btn btn-primary">Ajouter la tâche</button>
   </form>
   <?php endif; ?>
 </div>
+
 </body>
 </html>
+

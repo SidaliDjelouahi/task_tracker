@@ -84,7 +84,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
               <button class="btn btn-primary w-100">Connexion</button>
             </form>
 
-            <p class="text-muted small mt-3 mb-0">Démo : <b>admin</b> / <b>admin123</b></p>
+            <!-- Lien vers l'inscription -->
+            <p class="text-center mt-3">
+              <a href="signup.php">Créer un compte</a>
+            </p>
+
+            <!-- <p class="text-muted small mt-3 mb-0">Démo : <b>admin</b> / <b>admin123</b></p> -->
             <hr>
             <a class="btn btn-outline-secondary w-100" href="login.php?action=logout">Déconnexion</a>
           </div>
